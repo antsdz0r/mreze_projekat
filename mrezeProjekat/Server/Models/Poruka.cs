@@ -6,7 +6,11 @@ using System.Threading.Tasks;
 
 namespace Server.Models
 {
-    internal class Poruka
+    public class Poruka
     {
+        public string Posiljalac { get; set; }
+        public string VremenskiTrenutak { get; set; }
+
+        public string Sadrzaj { get; set; }
     }
 }
