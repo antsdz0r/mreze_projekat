@@ -16,5 +16,9 @@ namespace Client.Network
             _client = new TcpClient();
             _client.Connect(serverIP, port);
         }
+        public NetworkStream GetStream()
+        {
+            return _client.GetStream();
+        }
     }
 }

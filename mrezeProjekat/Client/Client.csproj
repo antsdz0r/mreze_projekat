@@ -43,6 +43,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Network\Protocol.cs" />
     <Compile Include="Network\TcpClientService.cs" />
     <Compile Include="Network\UdpClientService.cs" />
     <Compile Include="Client.cs" />

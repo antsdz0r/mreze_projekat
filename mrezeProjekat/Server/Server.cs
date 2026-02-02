@@ -23,9 +23,10 @@ namespace Server
 
 
             Console.WriteLine("Pokretanje networka ...");
-            TcpServer tcpServer = new TcpServer();
+            TcpServer tcpServer = new TcpServer(manager);
             tcpServer.Start();
-            Console.WriteLine("Serveri pokrenuti..");
+            Console.WriteLine($"TCP server je pokrenut na portu : {tcpServer.Port}");
+            Task.Run(() => tcpServer.AcceptClients());
             UdpListener udp = new UdpListener(udpPort: 50001, tcpPortProvider: () => tcpServer.Port);
             udp.Run();
         }

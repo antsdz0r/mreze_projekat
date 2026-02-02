@@ -7,11 +7,27 @@ using Server.Models;
 
 namespace Server.Services
 {
-    internal class ServerManager
+    public class ServerManager
     {
         private readonly Dictionary<string, List<Kanal>> _serveri = new Dictionary<string, List<Kanal>>();
         public Dictionary<string, List<Kanal>> GetServers() => _serveri;
+        public IEnumerable<string> GetServerNames() => _serveri.Keys;
 
+        public IEnumerable<string> GetChannelNames(string serverName)
+        {
+            if (!_serveri.TryGetValue(serverName, out var kanali))
+                return Enumerable.Empty<string>();
+
+            return kanali.Select(k => k.Naziv);
+        }
+
+        public Kanal GetChannel(string serverName, string channelName)
+        {
+            if (!_serveri.TryGetValue(serverName, out var kanali))
+                return null;
+
+            return kanali.FirstOrDefault(k => k.Naziv == channelName);
+        }
         public void RunAdminMenu()
         {
             int running = 1;

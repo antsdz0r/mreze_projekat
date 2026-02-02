@@ -46,6 +46,7 @@
     <Compile Include="Models\ClientInfo.cs" />
     <Compile Include="Models\Kanal.cs" />
     <Compile Include="Models\Poruka.cs" />
+    <Compile Include="Network\Protocol.cs" />
     <Compile Include="Network\TcpServer.cs" />
     <Compile Include="Network\UdpListener.cs" />
     <Compile Include="Server.cs" />
