@@ -90,11 +90,11 @@ namespace Client.Services
                         tcpPort = null;
                         continue;
                     }
-                    Console.WriteLine("\n Dostupni server :");
+                    Console.WriteLine("\n----Dostupni server----");
                     for (int i = 0; i < servers.Count; i++)
 
                         Console.WriteLine($"{i + 1}.{servers[i]}");
-                    Console.Write("\n Izaberi server (broj ili naziv)");
+                    Console.Write("\nIzaberi server (broj ili naziv) : ");
                     string choice = Console.ReadLine()?.Trim() ?? "";
                     string serverName = choice;
 
@@ -112,14 +112,21 @@ namespace Client.Services
                         tcpPort = null;
                         continue;
                     }
-                    Console.Write("\n Izaberi kanal(Broj ili naziv)");
+                    Console.WriteLine();
+                    Console.WriteLine("----Dostupni kanali----");
+                    for(int i = 0; i < channels.Count; i++)
+                    {
+                        Console.WriteLine($"{ i + 1}.{ channels[i]}");
+                    }
+                        Console.Write("\nIzaberi kanal(Broj ili naziv) : ");
                     string channelchoice = Console.ReadLine()?.Trim() ?? "";
                     string channelname = channelchoice;
+                    if (int.TryParse(channelchoice, out int cidx) && cidx >= 1 && cidx <= channels.Count)
+                        channelname = channels[cidx - 1];
                     Protocol.SendLine(_writer, channelname);
                     var ok = Protocol.ReadLineRequired(_reader); // ocekuje "ok", HANDSHAKE
 
-                    if (int.TryParse(channelchoice, out int cidx) && cidx >= 1 && cidx <= channels.Count)
-                        channelname = channels[cidx - 1];
+                   
                     Console.WriteLine("\nSalji poruke u kanal (QUIT za izlaz / LOGOUT za odjavu):");
                     while (true)
                     {

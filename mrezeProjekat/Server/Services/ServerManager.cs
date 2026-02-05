@@ -114,9 +114,16 @@ namespace Server.Services
                         }
 
                         case "4": {
-                            Console.WriteLine("Pokretanje mreze za prijavljivanje");
-                            running = 0;
-                            break;
+                            if (_serveri.Count != 0)
+                            {
+                                Console.WriteLine("Pokretanje mreze za prijavljivanje");
+                                running = 0;
+                            }
+                            else
+                            {
+                                Console.WriteLine("Mreza se ne moze pokrenuti ako ne postoji nijedan server.");
+                            }
+                                break;
                         }
                         default:
                         Console.WriteLine("Pogresna opcija");
