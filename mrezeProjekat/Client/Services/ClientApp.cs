@@ -145,7 +145,9 @@ namespace Client.Services
                             running = 0;
                             break;
                         }
-                        Protocol.SendLine(_writer, msg);
+                        string keyword = channelchoice + _nickaname;
+                        string encryption = KeywordCipher.Encrypt(msg,keyword);
+                        Protocol.SendLine(_writer, encryption);
                     }
                 }
             }

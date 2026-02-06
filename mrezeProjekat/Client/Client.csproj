@@ -49,6 +49,7 @@
     <Compile Include="Client.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Services\ClientApp.cs" />
+    <Compile Include="Services\KeywordCipher.cs" />
     <Compile Include="Services\ServerListManager.cs" />
   </ItemGroup>
   <ItemGroup>
