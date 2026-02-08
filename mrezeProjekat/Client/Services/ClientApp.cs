@@ -65,8 +65,12 @@ namespace Client.Services
                         _reader = new StreamReader(ns, Encoding.UTF8);
                         _writer = new StreamWriter(ns, Encoding.UTF8) { AutoFlush = true };
                         var hello = Protocol.ReadLineRequired(_reader);             //bug fixing
-                        if (hello == "NICK?")
+                        if(hello == "NICK?")
+                        {
+                          
                             Protocol.SendLine(_writer, _nickaname);
+                        }
+
 
 
                         Console.WriteLine("TCP konekcija uspesna");
@@ -124,7 +128,7 @@ namespace Client.Services
                     if (int.TryParse(channelchoice, out int cidx) && cidx >= 1 && cidx <= channels.Count)
                         channelname = channels[cidx - 1];
                     Protocol.SendLine(_writer, channelname);
-                    var ok = Protocol.ReadLineRequired(_reader); // ocekuje "ok", HANDSHAKE
+                    var ok = Protocol.ReadLineRequired(_reader);
 
                    
                     Console.WriteLine("\nSalji poruke u kanal (QUIT za izlaz / LOGOUT za odjavu):");
@@ -145,7 +149,8 @@ namespace Client.Services
                             running = 0;
                             break;
                         }
-                        string keyword = channelchoice + _nickaname;
+                        string keyword = channelname + _nickaname;   
+
                         string encryption = KeywordCipher.Encrypt(msg,keyword);
                         Protocol.SendLine(_writer, encryption);
                     }

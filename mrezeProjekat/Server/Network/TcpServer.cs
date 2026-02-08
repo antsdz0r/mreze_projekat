@@ -13,10 +13,12 @@ namespace Server.Network
     {
         private TcpListener _listener;
         private readonly ServerManager _serverManager;
+        private readonly DecryptionService _decryptionService = new DecryptionService();
+
 
         public int Port { get; private set; }
 
-      
+
         private enum ClientStage
         {
             AwaitNick,
@@ -32,23 +34,27 @@ namespace Server.Network
 
             public ClientInfo Info { get; } = new ClientInfo();
 
-          
+
             public byte[] Buffer { get; } = new byte[4096];
             public StringBuilder IncomingText { get; } = new StringBuilder();
+
+            public Decoder Utf8Decoder { get; } = Encoding.UTF8.GetDecoder();
 
             public ClientState(Socket s) => Socket = s;
         }
 
-      
+
         private readonly Dictionary<Socket, ClientState> _clients = new Dictionary<Socket, ClientState>();
 
         public TcpServer(ServerManager serverManager)
         {
             _serverManager = serverManager;
+            
         }
 
         public void Start()
         {
+            Console.WriteLine("=== MARKER: TcpServer.cs DECODER VERSION ===");
             _listener = new TcpListener(IPAddress.Any, 0);
             _listener.Start();
             Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -60,19 +66,19 @@ namespace Server.Network
         {
             Console.WriteLine("TCP: polling loop...");
 
-          
+
 
             while (true)
             {
                 try
                 {
-                    
+
                     while (_listener.Pending())
                     {
                         TcpClient tcp = _listener.AcceptTcpClient();
                         Socket s = tcp.Client;
 
-                        
+
                         s.Blocking = false;
 
                         var cs = new ClientState(s);
@@ -80,16 +86,16 @@ namespace Server.Network
 
                         Console.WriteLine("TCP klijent povezan");
 
-                       
+
                         SendLine(cs, "NICK?");
                     }
 
-                    
+
                     if (_clients.Count > 0)
                     {
                         var readList = new List<Socket>(_clients.Keys);
 
-                       
+
                         Socket.Select(readList, null, null, 1000);
 
                         foreach (var s in readList)
@@ -99,7 +105,7 @@ namespace Server.Network
 
                             if (!ReadAndProcess(cs))
                             {
-                                
+
                                 DropClient(cs);
                             }
                         }
@@ -107,18 +113,18 @@ namespace Server.Network
                 }
                 catch (Exception ex)
                 {
-                    
+
                     Console.WriteLine($"[TCP polling] greska: {ex.Message}");
                 }
 
-               
+
                 Thread.Sleep(5);
             }
         }
 
         private bool ReadAndProcess(ClientState cs)
         {
-            
+
             try
             {
                 while (true)
@@ -131,28 +137,29 @@ namespace Server.Network
                     }
                     catch (SocketException se)
                     {
-                        
+
                         if (se.SocketErrorCode == SocketError.WouldBlock)
                             break;
 
-                        
+
                         return false;
                     }
 
-                  
+
                     if (n == 0) return false;
 
-                    string chunk = Encoding.UTF8.GetString(cs.Buffer, 0, n);
-                    cs.IncomingText.Append(chunk);
+                    char[] chars = new char[Encoding.UTF8.GetMaxCharCount(n)];
+                    int charCount = cs.Utf8Decoder.GetChars(cs.Buffer, 0, n, chars, 0);
+                    cs.IncomingText.Append(chars, 0, charCount);
 
-                   
+
                     while (TryPopLine(cs.IncomingText, out string line))
                     {
                         if (!ProcessLine(cs, line))
-                            return false; 
+                            return false;
                     }
 
-                   
+
                 }
 
                 return true;
@@ -165,13 +172,16 @@ namespace Server.Network
 
         private bool ProcessLine(ClientState cs, string line)
         {
-            
             line = (line ?? "").Trim();
 
             if (cs.Stage == ClientStage.Chat)
             {
                 if (line.Equals("QUIT", StringComparison.OrdinalIgnoreCase))
                     return false;
+
+                // KEYWORD mora da bude ISTI kao kod klijenta
+                string keyDecryption = (cs.Info.SelectedChannel ?? "") + (cs.Info.Nickname ?? "");
+                string decryptedMessage = _decryptionService.Decrypt(line, keyDecryption);
 
                 var vreme = DateTime.Now.ToString("dd.MM.yyyy HH:mm:ss");
 
@@ -182,14 +192,17 @@ namespace Server.Network
                     {
                         Posiljalac = cs.Info.Nickname,
                         VremenskiTrenutak = vreme,
-                        Sadrzaj = line
+                        Sadrzaj = decryptedMessage
                     });
                 }
 
-                Console.WriteLine($"[{vreme}]-{cs.Info.SelectedServer}:{cs.Info.SelectedChannel}:{line}-{cs.Info.Nickname}");
+               
+
+                Console.WriteLine($"[{vreme}]-{cs.Info.SelectedServer}:{cs.Info.SelectedChannel}:{decryptedMessage}-{cs.Info.Nickname}");
                 return true;
             }
 
+           
             switch (cs.Stage)
             {
                 case ClientStage.AwaitNick:
@@ -206,20 +219,19 @@ namespace Server.Network
 
                 case ClientStage.AwaitChannel:
                     cs.Info.SelectedChannel = line;
-                    SendLine(cs, "OK");
+                    SendLine(cs, "ok");
                     cs.Stage = ClientStage.Chat;
                     return true;
-
-                default:
-                    return false;
             }
+
+            return true;
         }
 
-        
+
 
         private static bool TryPopLine(StringBuilder sb, out string line)
         {
-           
+
             for (int i = 0; i < sb.Length; i++)
             {
                 if (sb[i] == '\n')
@@ -237,10 +249,10 @@ namespace Server.Network
             return false;
         }
 
-     
+
         private static void SendLine(ClientState cs, string line)
         {
-            
+
             var data = Encoding.UTF8.GetBytes((line ?? "") + "\n");
             SafeSendAll(cs.Socket, data);
         }
@@ -258,7 +270,7 @@ namespace Server.Network
 
         private static void SafeSendAll(Socket s, byte[] data)
         {
-           
+
             int sent = 0;
             while (sent < data.Length)
             {
@@ -270,7 +282,7 @@ namespace Server.Network
                 }
                 catch (SocketException se)
                 {
-                 
+
                     if (se.SocketErrorCode == SocketError.WouldBlock)
                         break;
 

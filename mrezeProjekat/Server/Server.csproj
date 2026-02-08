@@ -52,7 +52,7 @@
     <Compile Include="Server.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Services\ClientHandler.cs" />
-    <Compile Include="Services\EncryptionService.cs" />
+    <Compile Include="Services\DecryptionService.cs" />
     <Compile Include="Services\MessageDispatcher.cs" />
     <Compile Include="Services\PresenceManager.cs" />
     <Compile Include="Services\ServerManager.cs" />
