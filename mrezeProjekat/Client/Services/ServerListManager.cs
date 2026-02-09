@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 namespace Client.Services
 {
     internal class ServerListManager
-        
+
     {
         private readonly string _path;
 
@@ -18,13 +18,23 @@ namespace Client.Services
 
         public List<string> Load()
         {
-            if(!File.Exists(_path)) return new List<string>();
-            return File.ReadAllLines(_path)
-                 .Select(x => x.Trim())
-                 .Where(x => !string.IsNullOrWhiteSpace(x))
-                 .Where(x => !x.StartsWith(LastExitPrefix, StringComparison.OrdinalIgnoreCase))
-                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                 .ToList();
+            if (!File.Exists(_path)) return new List<string>();
+
+            
+            var result = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var raw in File.ReadAllLines(_path))
+            {
+                var line = (raw ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                if (line.StartsWith(LastExitPrefix, StringComparison.OrdinalIgnoreCase)) continue;
+
+                if (seen.Add(line))
+                    result.Add(line);
+            }
+
+            return result;
         }
         public DateTime? LoadLastExitUtc()
         {
@@ -53,8 +63,8 @@ namespace Client.Services
 
         public void add(string ServerName)
         {
-            if(string.IsNullOrWhiteSpace(ServerName)) return;
-            var existing = new HashSet<string>(Load(),StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(ServerName)) return;
+            var existing = new HashSet<string>(Load(), StringComparer.OrdinalIgnoreCase);
             if (existing.Contains(ServerName)) return;
 
             existing.Add(ServerName);
@@ -63,9 +73,14 @@ namespace Client.Services
             DateTime? lastExit = LoadLastExitUtc();
             if (lastExit != null) lines.Add(LastExitPrefix + lastExit.Value.ToString("o"));
 
-            lines.AddRange(existing);
+           
+            var ordered = Load();
+            ordered.Add(ServerName);
 
-            File.AppendAllLines(_path,lines);
+            lines.AddRange(ordered);
+
+           
+            File.WriteAllLines(_path, lines);
         }
     }
 }

@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
+using System.Threading;
 using Client.Network;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -21,7 +22,7 @@ namespace Client.Services
         private readonly ServerListManager _listManager;
         private DateTime? lastExitUtc;
         private string lastExitToSend;
-        
+
 
         public ClientApp()
         {
@@ -71,14 +72,14 @@ namespace Client.Services
                     {
                         _nickaname = ime;
                         _tcp = new TcpClientService();
-                        _tcp.Connect(SERVER_IP, tcpPort.Value);                                        
+                        _tcp.Connect(SERVER_IP, tcpPort.Value);
                         NetworkStream ns = _tcp.GetStream();
                         _reader = new StreamReader(ns, Encoding.UTF8);
                         _writer = new StreamWriter(ns, Encoding.UTF8) { AutoFlush = true };
-                        var hello = Protocol.ReadLineRequired(_reader);             //bug fixing
-                        if(hello == "NICK?")
+                        var hello = Protocol.ReadLineRequired(_reader);            
+                        if (hello == "NICK?")
                         {
-                          
+
                             Protocol.SendLine(_writer, _nickaname);
                         }
 
@@ -105,20 +106,65 @@ namespace Client.Services
                         tcpPort = null;
                         continue;
                     }
-                    Console.WriteLine("\n----Dostupni server----");
-                    for (int i = 0; i < servers.Count; i++)
 
-                        Console.WriteLine($"{i + 1}.{servers[i]}");
-                    Console.Write("\nIzaberi server (broj ili naziv) : ");
-                    string choice = Console.ReadLine()?.Trim() ?? "";
+                   
+                    var saved = _listManager.Load();
+                    var savedAvailable = saved
+                        .Where(s => servers.Any(x => string.Equals(x, s, StringComparison.OrdinalIgnoreCase)))
+                        .ToList();
+
+                    if (savedAvailable.Count > 0)
+                    {
+                        Console.WriteLine("\n----Sacuvani serveri (prečice)----");
+                        for (int i = 0; i < savedAvailable.Count; i++)
+                            Console.WriteLine($"S{i + 1}. {savedAvailable[i]}");
+                        Console.WriteLine("0. Prikaži sve dostupne servere");
+                        Console.Write("\nIzaberi server (S-broj / 0 / naziv) : ");
+                    }
+                    else
+                    {
+                        Console.WriteLine("\n----Dostupni serveri----");
+                        for (int i = 0; i < servers.Count; i++)
+                            Console.WriteLine($"{i + 1}. {servers[i]}");
+                        Console.Write("\nIzaberi server (broj ili naziv) : ");
+                    }
+
+                    string choice = (Console.ReadLine() ?? "").Trim();
                     string serverName = choice;
 
-                    if (int.TryParse(choice, out int idx) && idx >= 1 && idx <= servers.Count)
+                   
+                    if (savedAvailable.Count > 0 &&
+                        choice.Length >= 2 &&
+                        (choice[0] == 'S' || choice[0] == 's') &&
+                        int.TryParse(choice.Substring(1), out int sidx) &&
+                        sidx >= 1 && sidx <= savedAvailable.Count)
+                    {
+                        serverName = savedAvailable[sidx - 1];
+                    }
+                    else if (savedAvailable.Count > 0 && choice == "0")
+                    {
+                        
+                        Console.WriteLine("\n----Dostupni serveri----");
+                        for (int i = 0; i < servers.Count; i++)
+                            Console.WriteLine($"{i + 1}. {servers[i]}");
+                        Console.Write("\nIzaberi server (broj ili naziv) : ");
+                        choice = (Console.ReadLine() ?? "").Trim();
+                        serverName = choice;
+                    }
+
+                    if (int.TryParse(serverName, out int idx) && idx >= 1 && idx <= servers.Count)
                         serverName = servers[idx - 1];
+
+                    
+                    if (!servers.Any(x => string.Equals(x, serverName, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        Console.WriteLine("Nepostojeci server. Pokusaj ponovo.");
+                        continue;
+                    }
 
                     Protocol.SendLine(_writer, serverName);
                     _listManager.add(serverName);
-                    var q = Protocol.ReadLineRequired(_reader);  
+                    var q = Protocol.ReadLineRequired(_reader);
                     if (q.Equals("LASTEXIT?", StringComparison.OrdinalIgnoreCase))
                         Protocol.SendLine(_writer, lastExitToSend);
                     else
@@ -135,10 +181,11 @@ namespace Client.Services
                             else Console.WriteLine($"- {u}");
                         }
                     }
-                    
+
 
                     var channels = Protocol.ReadList(_reader);
-                    if (channels.Count == 0) {
+                    if (channels.Count == 0)
+                    {
                         Console.WriteLine(" \nIzabrani server nema kanale. \n");
                         Protocol.SendLine(_writer, "QUIT");
                         ulogovan = 0;
@@ -147,11 +194,11 @@ namespace Client.Services
                     }
                     Console.WriteLine();
                     Console.WriteLine("----Dostupni kanali----");
-                    for(int i = 0; i < channels.Count; i++)
+                    for (int i = 0; i < channels.Count; i++)
                     {
-                        Console.WriteLine($"{ i + 1}.{ channels[i]}");
+                        Console.WriteLine($"{i + 1}.{channels[i]}");
                     }
-                        Console.Write("\nIzaberi kanal(Broj ili naziv) : ");
+                    Console.Write("\nIzaberi kanal(Broj ili naziv) : ");
                     string channelchoice = Console.ReadLine()?.Trim() ?? "";
                     string channelname = channelchoice;
                     if (int.TryParse(channelchoice, out int cidx) && cidx >= 1 && cidx <= channels.Count)
@@ -162,8 +209,27 @@ namespace Client.Services
                         Console.WriteLine(h);
                     var ok = Protocol.ReadLineRequired(_reader);
 
-                   
+
                     Console.WriteLine("\nSalji poruke u kanal (QUIT za izlaz / LOGOUT za odjavu):");
+                    var cts = new CancellationTokenSource();
+                    var recvTask = Task.Run(() =>
+                    {
+                        try
+                        {
+                            while (!cts.IsCancellationRequested)
+                            {
+                                var line = _reader.ReadLine();
+                                if (line == null) break;
+                                line = line.Trim();
+                                if (string.IsNullOrEmpty(line)) continue;
+
+                                
+                                Console.WriteLine(line);
+                            }
+                        }
+                        catch { /* ignore */ }
+                    }, cts.Token);
+
                     while (true)
                     {
                         string msg = Console.ReadLine() ?? "";
@@ -174,18 +240,22 @@ namespace Client.Services
                             tcpPort = null;
                             Console.WriteLine("Uspesna odjava \n");
                             _listManager.SaveLastExitUtc(DateTime.UtcNow);
+                            cts.Cancel();
+                            try { recvTask.Wait(200); } catch { }
                             break;
-                    }
+                        }
                         if (msg.Equals("QUIT", StringComparison.OrdinalIgnoreCase))
                         {
                             Protocol.SendLine(_writer, "QUIT");
                             _listManager.SaveLastExitUtc(DateTime.UtcNow);
+                            cts.Cancel();
+                            try { recvTask.Wait(200); } catch { }
                             running = 0;
                             break;
                         }
-                        string keyword = channelname + _nickaname;   
+                        string keyword = channelname + _nickaname;
 
-                        string encryption = KeywordCipher.Encrypt(msg,keyword);
+                        string encryption = KeywordCipher.Encrypt(msg, keyword);
                         Protocol.SendLine(_writer, encryption);
                     }
                 }

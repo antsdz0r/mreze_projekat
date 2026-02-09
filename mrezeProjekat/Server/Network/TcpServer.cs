@@ -15,9 +15,7 @@ namespace Server.Network
         private readonly ServerManager _serverManager;
         private readonly DecryptionService _decryptionService = new DecryptionService();
 
-
         public int Port { get; private set; }
-
 
         private enum ClientStage
         {
@@ -28,35 +26,46 @@ namespace Server.Network
             Chat
         }
 
+        private sealed class PendingSend
+        {
+            public byte[] Data { get; }
+            public int Offset { get; set; }
+
+            public PendingSend(byte[] data)
+            {
+                Data = data ?? Array.Empty<byte>();
+                Offset = 0;
+            }
+        }
+
         private sealed class ClientState
         {
             public Socket Socket { get; }
             public ClientStage Stage { get; set; } = ClientStage.AwaitNick;
 
             public ClientInfo Info { get; } = new ClientInfo();
-
             public DateTime? LastExitUtc { get; set; } = null;
 
             public byte[] Buffer { get; } = new byte[4096];
             public StringBuilder IncomingText { get; } = new StringBuilder();
-
             public Decoder Utf8Decoder { get; } = Encoding.UTF8.GetDecoder();
+
+           
+            public Queue<PendingSend> Outbox { get; } = new Queue<PendingSend>();
 
             public ClientState(Socket s) => Socket = s;
         }
-
 
         private readonly Dictionary<Socket, ClientState> _clients = new Dictionary<Socket, ClientState>();
 
         public TcpServer(ServerManager serverManager)
         {
             _serverManager = serverManager;
-            
         }
 
         public void Start()
         {
-            Console.WriteLine("=== MARKER: TcpServer.cs DECODER VERSION ===");
+            Console.WriteLine("=== TcpServer.cs (select polling + outbox + broadcast) ===");
             _listener = new TcpListener(IPAddress.Any, 0);
             _listener.Start();
             Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -68,18 +77,15 @@ namespace Server.Network
         {
             Console.WriteLine("TCP: polling loop...");
 
-
-
             while (true)
             {
                 try
                 {
-
+                    
                     while (_listener.Pending())
                     {
                         TcpClient tcp = _listener.AcceptTcpClient();
                         Socket s = tcp.Client;
-
 
                         s.Blocking = false;
 
@@ -87,27 +93,45 @@ namespace Server.Network
                         _clients[s] = cs;
 
                         Console.WriteLine("TCP klijent povezan");
-
-
                         SendLine(cs, "NICK?");
                     }
-
 
                     if (_clients.Count > 0)
                     {
                         var readList = new List<Socket>(_clients.Keys);
+                        var writeList = new List<Socket>();
 
+                        foreach (var kv in _clients)
+                        {
+                            if (kv.Value.Outbox.Count > 0)
+                                writeList.Add(kv.Key);
+                        }
 
-                        Socket.Select(readList, null, null, 1000);
+                       
+                        Socket.Select(readList, writeList, null, 1000);
 
+                      
                         foreach (var s in readList)
                         {
                             if (!_clients.TryGetValue(s, out var cs))
                                 continue;
 
                             if (!ReadAndProcess(cs))
-                            {
+                                DropClient(cs);
+                        }
 
+                        
+                        foreach (var s in writeList)
+                        {
+                            if (!_clients.TryGetValue(s, out var cs))
+                                continue;
+
+                            try
+                            {
+                                FlushOutbox(cs);
+                            }
+                            catch
+                            {
                                 DropClient(cs);
                             }
                         }
@@ -115,10 +139,8 @@ namespace Server.Network
                 }
                 catch (Exception ex)
                 {
-
                     Console.WriteLine($"[TCP polling] greska: {ex.Message}");
                 }
-
 
                 Thread.Sleep(5);
             }
@@ -126,27 +148,22 @@ namespace Server.Network
 
         private bool ReadAndProcess(ClientState cs)
         {
-
             try
             {
                 while (true)
                 {
                     int n;
-
                     try
                     {
                         n = cs.Socket.Receive(cs.Buffer);
                     }
                     catch (SocketException se)
                     {
-
                         if (se.SocketErrorCode == SocketError.WouldBlock)
                             break;
 
-
                         return false;
                     }
-
 
                     if (n == 0) return false;
 
@@ -154,14 +171,11 @@ namespace Server.Network
                     int charCount = cs.Utf8Decoder.GetChars(cs.Buffer, 0, n, chars, 0);
                     cs.IncomingText.Append(chars, 0, charCount);
 
-
                     while (TryPopLine(cs.IncomingText, out string line))
                     {
                         if (!ProcessLine(cs, line))
                             return false;
                     }
-
-
                 }
 
                 return true;
@@ -176,12 +190,13 @@ namespace Server.Network
         {
             line = (line ?? "").Trim();
 
+            
             if (cs.Stage == ClientStage.Chat)
             {
                 if (line.Equals("QUIT", StringComparison.OrdinalIgnoreCase))
                     return false;
 
-                // KEYWORD mora da bude ISTI kao kod klijenta
+              
                 string keyDecryption = (cs.Info.SelectedChannel ?? "") + (cs.Info.Nickname ?? "");
                 string decryptedMessage = _decryptionService.Decrypt(line, keyDecryption);
 
@@ -198,9 +213,11 @@ namespace Server.Network
                     });
                 }
 
-               
-
                 Console.WriteLine($"[{vreme}]-{cs.Info.SelectedServer}:{cs.Info.SelectedChannel}:{decryptedMessage}-{cs.Info.Nickname}");
+
+                
+                BroadcastToChannel(cs, vreme, decryptedMessage);
+
                 return true;
             }
 
@@ -215,10 +232,26 @@ namespace Server.Network
 
                 case ClientStage.AwaitServer:
                     cs.Info.SelectedServer = line;
-                    //   SendList(cs, _serverManager.GetChannelNames(cs.Info.SelectedServer));
-                    //   cs.Stage = ClientStage.AwaitChannel;
+
+                  
                     SendLine(cs, "LASTEXIT?");
                     cs.Stage = ClientStage.AwaitLastExit;
+                    return true;
+
+                case ClientStage.AwaitLastExit:
+                    if (!line.Equals("NONE", StringComparison.OrdinalIgnoreCase) &&
+                        DateTime.TryParse(line, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
+                    {
+                        cs.LastExitUtc = dt.ToUniversalTime();
+                    }
+                    else
+                    {
+                        cs.LastExitUtc = null;
+                    }
+
+                    SendUnreadCounts(cs);
+                    SendList(cs, _serverManager.GetChannelNames(cs.Info.SelectedServer));
+                    cs.Stage = ClientStage.AwaitChannel;
                     return true;
 
                 case ClientStage.AwaitChannel:
@@ -227,28 +260,6 @@ namespace Server.Network
                     SendLine(cs, "ok");
                     cs.Stage = ClientStage.Chat;
                     return true;
-                case ClientStage.AwaitLastExit:
-                    {
-                        
-                        if (!line.Equals("NONE", StringComparison.OrdinalIgnoreCase) &&
-                            DateTime.TryParse(line, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
-                        {
-                            cs.LastExitUtc = dt.ToUniversalTime();
-                        }
-                        else
-                        {
-                            cs.LastExitUtc = null;
-                        }
-
-                     
-                        SendUnreadCounts(cs);
-
-                       
-                        SendList(cs, _serverManager.GetChannelNames(cs.Info.SelectedServer));
-
-                        cs.Stage = ClientStage.AwaitChannel;
-                        return true;
-                    }
             }
 
             return true;
@@ -260,15 +271,13 @@ namespace Server.Network
 
             if (kanal == null || kanal.Poruke == null || kanal.Poruke.Count == 0)
             {
-                SendList(cs, Array.Empty<string>());  
+                SendList(cs, Array.Empty<string>());
                 return;
             }
 
             var lines = new List<string>();
-
             foreach (var p in kanal.Poruke)
             {
-               
                 lines.Add($"[{p.VremenskiTrenutak}]-{p.Posiljalac}: {p.Sadrzaj}");
             }
 
@@ -277,7 +286,6 @@ namespace Server.Network
 
         private static bool TryPopLine(StringBuilder sb, out string line)
         {
-
             for (int i = 0; i < sb.Length; i++)
             {
                 if (sb[i] == '\n')
@@ -295,12 +303,48 @@ namespace Server.Network
             return false;
         }
 
+        private static void EnqueueSend(ClientState cs, byte[] data)
+        {
+            if (cs == null) return;
+            cs.Outbox.Enqueue(new PendingSend(data));
+        }
+
+        private static void FlushOutbox(ClientState cs)
+        {
+            while (cs.Outbox.Count > 0)
+            {
+                var item = cs.Outbox.Peek();
+                if (item.Offset >= item.Data.Length)
+                {
+                    cs.Outbox.Dequeue();
+                    continue;
+                }
+
+                try
+                {
+                    int n = cs.Socket.Send(item.Data, item.Offset, item.Data.Length - item.Offset, SocketFlags.None);
+                    if (n <= 0) break;
+
+                    item.Offset += n;
+
+                    if (item.Offset >= item.Data.Length)
+                        cs.Outbox.Dequeue();
+                }
+                catch (SocketException se)
+                {
+                    if (se.SocketErrorCode == SocketError.WouldBlock)
+                        break;
+
+                    throw;
+                }
+            }
+        }
 
         private static void SendLine(ClientState cs, string line)
         {
-
+           
             var data = Encoding.UTF8.GetBytes((line ?? "") + "\n");
-            SafeSendAll(cs.Socket, data);
+            EnqueueSend(cs, data);
         }
 
         private static void SendList(ClientState cs, IEnumerable<string> items)
@@ -308,31 +352,29 @@ namespace Server.Network
             var sb = new StringBuilder();
             foreach (var it in items)
                 sb.Append(it ?? "").Append('\n');
+
             sb.Append("END\n");
 
             var data = Encoding.UTF8.GetBytes(sb.ToString());
-            SafeSendAll(cs.Socket, data);
+            EnqueueSend(cs, data);
         }
 
-        private static void SafeSendAll(Socket s, byte[] data)
+        private void BroadcastToChannel(ClientState sender, string timestamp, string messagePlain)
         {
+            
+            string line = $"[{timestamp}]-{sender.Info.Nickname}: {messagePlain}";
+            var data = Encoding.UTF8.GetBytes(line + "\n");
 
-            int sent = 0;
-            while (sent < data.Length)
+            foreach (var kv in _clients)
             {
-                try
-                {
-                    int n = s.Send(data, sent, data.Length - sent, SocketFlags.None);
-                    if (n <= 0) break;
-                    sent += n;
-                }
-                catch (SocketException se)
-                {
+                var cs = kv.Value;
+                if (cs == sender) continue;
+                if (cs.Stage != ClientStage.Chat) continue;
 
-                    if (se.SocketErrorCode == SocketError.WouldBlock)
-                        break;
-
-                    throw;
+                if (string.Equals(cs.Info.SelectedServer, sender.Info.SelectedServer, StringComparison.Ordinal) &&
+                    string.Equals(cs.Info.SelectedChannel, sender.Info.SelectedChannel, StringComparison.Ordinal))
+                {
+                    EnqueueSend(cs, data);
                 }
             }
         }
@@ -343,9 +385,11 @@ namespace Server.Network
             {
                 Console.WriteLine($"TCP klijent {cs.Info.Nickname} diskonektovan");
                 _clients.Remove(cs.Socket);
+
+                try { cs.Socket.Shutdown(SocketShutdown.Both); } catch { }
                 cs.Socket.Close();
             }
-            catch { /* ignore */ }
+            catch {  }
         }
 
         private void SendUnreadCounts(ClientState cs)
@@ -379,6 +423,7 @@ namespace Server.Network
 
             SendList(cs, unreadLines);
         }
+
         private static bool TryParseMsgTime(string s, out DateTime utc)
         {
             utc = default;
@@ -396,7 +441,5 @@ namespace Server.Network
 
             return false;
         }
-
-
     }
 }
