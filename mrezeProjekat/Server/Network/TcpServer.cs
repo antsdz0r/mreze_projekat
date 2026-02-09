@@ -23,6 +23,7 @@ namespace Server.Network
         {
             AwaitNick,
             AwaitServer,
+            AwaitLastExit,
             AwaitChannel,
             Chat
         }
@@ -34,6 +35,7 @@ namespace Server.Network
 
             public ClientInfo Info { get; } = new ClientInfo();
 
+            public DateTime? LastExitUtc { get; set; } = null;
 
             public byte[] Buffer { get; } = new byte[4096];
             public StringBuilder IncomingText { get; } = new StringBuilder();
@@ -213,21 +215,65 @@ namespace Server.Network
 
                 case ClientStage.AwaitServer:
                     cs.Info.SelectedServer = line;
-                    SendList(cs, _serverManager.GetChannelNames(cs.Info.SelectedServer));
-                    cs.Stage = ClientStage.AwaitChannel;
+                    //   SendList(cs, _serverManager.GetChannelNames(cs.Info.SelectedServer));
+                    //   cs.Stage = ClientStage.AwaitChannel;
+                    SendLine(cs, "LASTEXIT?");
+                    cs.Stage = ClientStage.AwaitLastExit;
                     return true;
 
                 case ClientStage.AwaitChannel:
                     cs.Info.SelectedChannel = line;
+                    SendChannelHistory(cs);
                     SendLine(cs, "ok");
                     cs.Stage = ClientStage.Chat;
                     return true;
+                case ClientStage.AwaitLastExit:
+                    {
+                        
+                        if (!line.Equals("NONE", StringComparison.OrdinalIgnoreCase) &&
+                            DateTime.TryParse(line, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
+                        {
+                            cs.LastExitUtc = dt.ToUniversalTime();
+                        }
+                        else
+                        {
+                            cs.LastExitUtc = null;
+                        }
+
+                     
+                        SendUnreadCounts(cs);
+
+                       
+                        SendList(cs, _serverManager.GetChannelNames(cs.Info.SelectedServer));
+
+                        cs.Stage = ClientStage.AwaitChannel;
+                        return true;
+                    }
             }
 
             return true;
         }
 
+        private void SendChannelHistory(ClientState cs)
+        {
+            var kanal = _serverManager.GetChannel(cs.Info.SelectedServer, cs.Info.SelectedChannel);
 
+            if (kanal == null || kanal.Poruke == null || kanal.Poruke.Count == 0)
+            {
+                SendList(cs, Array.Empty<string>());  
+                return;
+            }
+
+            var lines = new List<string>();
+
+            foreach (var p in kanal.Poruke)
+            {
+               
+                lines.Add($"[{p.VremenskiTrenutak}]-{p.Posiljalac}: {p.Sadrzaj}");
+            }
+
+            SendList(cs, lines);
+        }
 
         private static bool TryPopLine(StringBuilder sb, out string line)
         {
@@ -301,5 +347,56 @@ namespace Server.Network
             }
             catch { /* ignore */ }
         }
+
+        private void SendUnreadCounts(ClientState cs)
+        {
+            if (cs.LastExitUtc == null)
+            {
+                SendList(cs, Array.Empty<string>());
+                return;
+            }
+
+            var serverName = cs.Info.SelectedServer;
+            if (!_serverManager.GetServers().TryGetValue(serverName, out var kanali) || kanali.Count == 0)
+            {
+                SendList(cs, Array.Empty<string>());
+                return;
+            }
+
+            var unreadLines = new List<string>();
+            foreach (var k in kanali)
+            {
+                int cnt = 0;
+                foreach (var p in k.Poruke)
+                {
+                    if (TryParseMsgTime(p.VremenskiTrenutak, out var msgUtc) && msgUtc > cs.LastExitUtc.Value)
+                        cnt++;
+                }
+
+                if (cnt > 0)
+                    unreadLines.Add($"{k.Naziv}|{cnt}");
+            }
+
+            SendList(cs, unreadLines);
+        }
+        private static bool TryParseMsgTime(string s, out DateTime utc)
+        {
+            utc = default;
+
+            if (DateTime.TryParseExact(
+                    s,
+                    "dd.MM.yyyy HH:mm:ss",
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeLocal,
+                    out var dt))
+            {
+                utc = dt.ToUniversalTime();
+                return true;
+            }
+
+            return false;
+        }
+
+
     }
 }

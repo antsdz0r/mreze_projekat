@@ -19,18 +19,29 @@ namespace Client.Services
         private TcpClientService _tcp;
         private string _nickaname;
         private readonly ServerListManager _listManager;
+        private DateTime? lastExitUtc;
+        private string lastExitToSend;
+        
+
         public ClientApp()
         {
             _listManager = new ServerListManager();
+            lastExitUtc = _listManager.LoadLastExitUtc();
+            lastExitToSend = lastExitUtc == null ? "NONE" : lastExitUtc.Value.ToString("o");
         }
 
         int running = 1;
         int ulogovan = 0;
         int? tcpPort = null;
+
         public void Run()
         {
+            DateTime? lastExitUtc = _listManager.LoadLastExitUtc();
+            string lastExitToSend = lastExitUtc == null ? "NONE" : lastExitUtc.Value.ToString("o");
+
             while (running == 1)
             {
+
                 if (ulogovan == 0)
                 {
                     Console.WriteLine("Unesite vase ime/nadimak za logovanje.");
@@ -107,8 +118,26 @@ namespace Client.Services
 
                     Protocol.SendLine(_writer, serverName);
                     _listManager.add(serverName);
-                    var channels = Protocol.ReadList(_reader);
+                    var q = Protocol.ReadLineRequired(_reader);  
+                    if (q.Equals("LASTEXIT?", StringComparison.OrdinalIgnoreCase))
+                        Protocol.SendLine(_writer, lastExitToSend);
+                    else
+                        Protocol.SendLine(_writer, "NONE");
 
+                    var unread = Protocol.ReadList(_reader);
+                    if (unread.Count > 0)
+                    {
+                        Console.WriteLine("\nNepročitane poruke po kanalima:");
+                        foreach (var u in unread)
+                        {
+                            var parts = u.Split('|');
+                            if (parts.Length == 2) Console.WriteLine($"- {parts[0]} ({parts[1]})");
+                            else Console.WriteLine($"- {u}");
+                        }
+                    }
+                    
+
+                    var channels = Protocol.ReadList(_reader);
                     if (channels.Count == 0) {
                         Console.WriteLine(" \nIzabrani server nema kanale. \n");
                         Protocol.SendLine(_writer, "QUIT");
@@ -128,6 +157,9 @@ namespace Client.Services
                     if (int.TryParse(channelchoice, out int cidx) && cidx >= 1 && cidx <= channels.Count)
                         channelname = channels[cidx - 1];
                     Protocol.SendLine(_writer, channelname);
+                    var history = Protocol.ReadList(_reader);
+                    foreach (var h in history)
+                        Console.WriteLine(h);
                     var ok = Protocol.ReadLineRequired(_reader);
 
                    
@@ -141,11 +173,13 @@ namespace Client.Services
                             ulogovan = 0;
                             tcpPort = null;
                             Console.WriteLine("Uspesna odjava \n");
+                            _listManager.SaveLastExitUtc(DateTime.UtcNow);
                             break;
                     }
                         if (msg.Equals("QUIT", StringComparison.OrdinalIgnoreCase))
                         {
                             Protocol.SendLine(_writer, "QUIT");
+                            _listManager.SaveLastExitUtc(DateTime.UtcNow);
                             running = 0;
                             break;
                         }
